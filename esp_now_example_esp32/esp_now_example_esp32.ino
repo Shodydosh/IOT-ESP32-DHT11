@@ -1,25 +1,38 @@
 #include <WiFi.h>
 #include <esp_now.h>
 
-// REPLACE WITH YOUR RECEIVER MAC Address
-uint8_t receiver8266Address[] = {0x08, 0xF9, 0xE0, 0x6B, 0x1C, 0xD1};
+uint8_t esp8266_mac[] = {0x08, 0xF9, 0xE0, 0x6B, 0x1C, 0xD1};  // Địa chỉ MAC của ESP8266
 
-// Structure example to send data
-// Must match the receiver structure
-typedef struct struct_message {
+struct ControlRelayMessage {
   bool relayOn;
-} struct_message;
+};
 
-// Create a struct_message called myData
-struct_message myData;
+struct StatusMessage {
+  bool relayOn;
+  float currentRms;
+};
 
 esp_now_peer_info_t peerInfo;
 
-// callback when data is sent
+unsigned long lastSendTime = 0;
+const unsigned long SEND_INTERVAL = 2000; // 2 giây gửi 1 lần
+
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   Serial.print("\r\nLast Packet Send Status:\t");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success"
                                                 : "Delivery Fail");
+}
+
+// Chỉnh sửa hàm onDataReceive để phù hợp với định nghĩa mới
+void onDataReceive(const esp_now_recv_info* recv_info, const uint8_t* incomingData, int len) {
+  if (len == sizeof(StatusMessage)) {
+    StatusMessage statusMessage;
+    memcpy(&statusMessage, incomingData, sizeof(statusMessage));
+    Serial.print("Relay State: ");
+    Serial.println(statusMessage.relayOn ? "ON" : "OFF");
+    Serial.print("Current RMS: ");
+    Serial.println(statusMessage.currentRms, 4);
+  }
 }
 
 void setup() {
@@ -35,13 +48,13 @@ void setup() {
     return;
   }
 
-  // Once ESPNow is successfully Init, we will register for Send Callback func to
-  // get the status of Trasnmitted packet
+  // Register callback functions
   esp_now_register_send_cb(OnDataSent);
+  esp_now_register_recv_cb(onDataReceive);
 
   // Register peer
-  memcpy(peerInfo.peer_addr, receiver8266Address, 6);
-  peerInfo.channel = 0;
+  memcpy(peerInfo.peer_addr, esp8266_mac, 6);
+  peerInfo.channel = 1;
   peerInfo.encrypt = false;
 
   // Add peer
@@ -52,29 +65,35 @@ void setup() {
 }
 
 void loop() {
-  delay(2000);
-  // Set values to send
-  myData.relayOn = true;
+  unsigned long currentMillis = millis();
 
-  // Send message via ESP-NOW
-  esp_err_t result =
-      esp_now_send(receiver8266Address, (uint8_t *)&myData, sizeof(myData));
+  // Gửi trạng thái relay mỗi 2 giây
+  if (currentMillis - lastSendTime >= SEND_INTERVAL) {
+    lastSendTime = currentMillis;
 
-  if (result == ESP_OK) {
-    Serial.println("Sent with success");
-  } else {
-    Serial.println("Error sending the data: ", result);
-  }
+    ControlRelayMessage controlRelayMessage;
+    controlRelayMessage.relayOn = true;  // Bật relay
 
-  delay(2000);
+    // Gửi thông điệp điều khiển relay
+    esp_err_t result = esp_now_send(esp8266_mac, (uint8_t *)&controlRelayMessage, sizeof(controlRelayMessage));
 
-  myData.relayOn = false;
+    if (result == ESP_OK) {
+      Serial.println("Sent with success");
+    } else {
+      Serial.println("Error sending the data");
+    }
 
-  result = esp_now_send(receiver8266Address, (uint8_t *)&myData, sizeof(myData));
+    // Gửi thông điệp điều khiển relay để tắt relay sau 2 giây
+    delay(2000);
 
-  if (result == ESP_OK) {
-    Serial.println("Sent with success");
-  } else {
-    Serial.println("Error sending the data: ", result);
+    controlRelayMessage.relayOn = false;
+
+    result = esp_now_send(esp8266_mac, (uint8_t *)&controlRelayMessage, sizeof(controlRelayMessage));
+
+    if (result == ESP_OK) {
+      Serial.println("Sent with success");
+    } else {
+      Serial.println("Error sending the data");
+    }
   }
 }
