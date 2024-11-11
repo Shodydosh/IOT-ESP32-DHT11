@@ -1,6 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <espnow.h>
 
+const int BUTTON_PIN = 12;
 const int ANALOG_PIN = A0;
 const int RELAY_PIN = 4;
 const float VREF = 5.0;
@@ -9,7 +10,7 @@ const float SENSOR_SENSITIVITY = 0.1;
 const int SAMPLE_COUNT = 1000;
 const int SAMPLE_INTERVAL = 1;
 const float CURRENT_THRESHOLD = 0.02;  // Ngưỡng dòng điện đo được để xác định trạng thái bật/tắt
-const unsigned long SEND_INTERVAL = 30000;
+const unsigned long SEND_INTERVAL = 10000;
 
 float voltageOffset = VREF / 2;
 unsigned long lastSampleTime = 0;
@@ -33,9 +34,10 @@ struct StatusMessage {
 };
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   WiFi.mode(WIFI_STA);
 
+  pinMode(BUTTON_PIN, INPUT_PULLUP); 
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
@@ -53,29 +55,30 @@ void setup() {
   esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
 
   esp_now_register_send_cb(OnDataSent);
-
   esp_now_register_recv_cb(onDataReceive);
 
-  // Đăng ký MAC address của ESP32 để gửi dữ liệu tới ESP32
-  esp_now_add_peer(esp32_mac, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+  Serial.print("Add peer status: ");
+  Serial.println(esp_now_add_peer(esp32_mac, ESP_NOW_ROLE_COMBO, 11, NULL, 0));
 }
 
 void loop() {
+  if (digitalRead(BUTTON_PIN) == LOW) { 
+    delay(200);  // Debounce
+
+    lastRelayState = currentRelayState;
+    currentRelayState = !currentRelayState;
+    digitalWrite(RELAY_PIN, currentRelayState ? HIGH : LOW);
+    digitalWrite(LED_BUILTIN, currentRelayState ? HIGH : LOW);
+    sendStatusMessage(currentRelayState, currentRMS);
+  }
+
   measureCurrentRMS();
   if (sampleCounter >= SAMPLE_COUNT) {
     currentRMS = calculateCurrentRMS();
   }
 
-  // Gửi giá trị RMS mỗi 30 giây
   if (millis() - lastSendTime >= SEND_INTERVAL) {
     lastSendTime = millis();
-    sendStatusMessage(currentRelayState, currentRMS);
-  }
-
-  // Kiểm tra trạng thái thiết bị dựa trên ngưỡng dòng điện
-  bool currentRelayState = (currentRMS >= CURRENT_THRESHOLD);
-  if (currentRelayState != lastRelayState) {
-    lastRelayState = currentRelayState;
     sendStatusMessage(currentRelayState, currentRMS);
   }
 }
@@ -140,19 +143,39 @@ void onDataReceive(uint8_t *mac, uint8_t *incomingData, uint8_t len) {
     ControlRelayMessage controlMessage;
     memcpy(&controlMessage, incomingData, sizeof(controlMessage));
 
-    if (controlMessage.relayOn) {
-      digitalWrite(LED_BUILTIN, HIGH);
-      digitalWrite(RELAY_PIN, HIGH);
-      Serial.println("Relay State: ON");
-    } else {
-      digitalWrite(LED_BUILTIN, LOW);
-      digitalWrite(RELAY_PIN, LOW);
-      Serial.println("Relay State: OFF");
-    }
+    changeRelayState(controlMessage.relayOn);
+  }
+}
+
+void changeRelayState(bool state) {
+  if (state == currentRelayState) {
+    return;
+  }
+  currentRelayState = state;
+  if (currentRelayState) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(RELAY_PIN, HIGH);
+    Serial.println("Relay State: ON");
+    lastRelayState = true;
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(RELAY_PIN, LOW);
+    Serial.println("Relay State: OFF");
+    lastRelayState = false;
   }
 }
 
 void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) {
+  Serial.print("MAC address: ");
+  for (int i = 0; i < 6; i++) {
+    if (mac_addr[i] < 0x10) {
+      Serial.print("0");
+    }
+    Serial.print(mac_addr[i], HEX);
+    if (i < 5) {
+      Serial.print(":");
+    }
+  }
   Serial.print("Last Packet Send Status: ");
   if (sendStatus == 0){
     Serial.println("Delivery success");

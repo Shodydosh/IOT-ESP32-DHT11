@@ -31,6 +31,7 @@ BlynkTimer timer;
 
 // ESP8266 MAC address
 uint8_t esp8266Address[] = {0x08, 0xF9, 0xE0, 0x6B, 0x1C, 0xD1};
+esp_now_peer_info_t peerInfo;
 
 struct ControlRelayMessage {
   bool relayOn;
@@ -42,20 +43,42 @@ struct StatusMessage {
 };
 
 void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("MAC address: ");
+  for (int i = 0; i < 6; i++) {
+    if (mac_addr[i] < 0x10) {
+      Serial.print("0");
+    }
+    Serial.print(mac_addr[i], HEX);
+    if (i < 5) {
+      Serial.print(":");
+    }
+  }
   Serial.print("Delivery Status: ");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 
-void sendRelayControl(bool on) {
-  ControlRelayMessage control = {on};
-  esp_now_send(esp8266Address, (uint8_t *)&control, sizeof(control));
-  Serial.printf("Relay %s message sent\n", on ? "ON" : "OFF");
+void onReceive(const esp_now_recv_info* recv_info, const uint8_t* incomingData, int len) {
+  if (len == sizeof(StatusMessage)) {
+    StatusMessage statusMessage;
+    memcpy(&statusMessage, incomingData, sizeof(statusMessage));
+    Serial.print("Relay State: ");
+    Serial.println(statusMessage.relayOn ? "ON" : "OFF");
+    Serial.print("Current RMS: ");
+    Serial.println(statusMessage.currentRms, 4);
+    Blynk.virtualWrite(VPIN_POWER, statusMessage.currentRms * 220);
+  }
 }
 
-void sendRelayStatus(bool on) {
-  StatusMessage status = {on, 0.0}; // Placeholder for RMS current value
-  esp_now_send(esp8266Address, (uint8_t *)&status, sizeof(status));
-  Serial.printf("Relay status sent: %s\n", on ? "ON" : "OFF");
+void sendRelayControl(bool on) {
+  ControlRelayMessage control;
+  control.relayOn = on;
+  esp_err_t result = esp_now_send(esp8266Address, (uint8_t *)&control, sizeof(control));
+  Serial.printf("Relay %s message sent\n", on ? "ON" : "OFF");
+  if (result == ESP_OK) {
+      Serial.println("Sent with success");
+    } else {
+      Serial.println("Error sending the data");
+  }
 }
 
 void sendSensorData() {
@@ -63,7 +86,7 @@ void sendSensorData() {
   float humidity = dht.readHumidity();
 
   if (!isnan(temperature) && !isnan(humidity)) {
-    Blynk.virtualWrite(VPIN_TEMP, temperature);
+    Blynk.virtualWrite(VPIN_TEMP, temperature-1);
     Blynk.virtualWrite(VPIN_HUMIDITY, humidity);
   } else {
     Serial.println("Failed to read from DHT sensor!");
@@ -99,20 +122,22 @@ void setup() {
   timer.setInterval(2000L, sendSensorData);
 
   WiFi.mode(WIFI_STA);
+  Serial.print("Wifi channel: ");
+  Serial.println(WiFi.channel());
+
   if (esp_now_init() != ESP_OK) {
     Serial.println("Error initializing ESP-NOW");
     return;
   }
 
   esp_now_register_send_cb(onSent);
-  esp_now_peer_info_t peerInfo;
+  esp_now_register_recv_cb(onReceive);
+
   memcpy(peerInfo.peer_addr, esp8266Address, 6);
-  peerInfo.channel = 0;
+  peerInfo.channel = 11;
   peerInfo.encrypt = false;
-  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add peer");
-    return;
-  }
+  Serial.print("Add peer status: ");
+  Serial.println(esp_now_add_peer(&peerInfo));
 }
 
 void loop() {
