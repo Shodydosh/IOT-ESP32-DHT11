@@ -36,6 +36,8 @@ struct StatusMessage {
 void setup() {
   Serial.begin(115200);
   WiFi.mode(WIFI_STA);
+  wifi_set_channel(4);
+  WiFi.printDiag(Serial);
 
   pinMode(BUTTON_PIN, INPUT_PULLUP); 
   pinMode(RELAY_PIN, OUTPUT);
@@ -58,7 +60,7 @@ void setup() {
   esp_now_register_recv_cb(onDataReceive);
 
   Serial.print("Add peer status: ");
-  Serial.println(esp_now_add_peer(esp32_mac, ESP_NOW_ROLE_COMBO, 11, NULL, 0));
+  Serial.println(esp_now_add_peer(esp32_mac, ESP_NOW_ROLE_COMBO, 4, NULL, 0));
 }
 
 void loop() {
